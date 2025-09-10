@@ -97,9 +97,9 @@ class KeyboardTeleop(Node):
             cmd.linear.y = +self.lin   # left strafe
         elif ch == 'd':
             cmd.linear.y = -self.lin   # right strafe
-        elif ch == 'z':
-            cmd.angular.z = +self.ang  # rotate left (CCW)
         elif ch == 'c':
+            cmd.angular.z = +self.ang  # rotate left (CCW)
+        elif ch == 'z':
             cmd.angular.z = -self.ang  # rotate right (CW)
         elif ch == 'k':
             self.desired = Twist()
