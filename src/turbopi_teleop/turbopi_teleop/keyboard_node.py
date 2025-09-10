@@ -117,6 +117,8 @@ class KeyboardTeleop(Node):
         # accept this new command and mark input time
         self.desired = cmd
         self.last_input = t
+        self.hold_deadline = t + self.hold_extend
+
 
     def _publish_cmd(self):
         now = time.time()
