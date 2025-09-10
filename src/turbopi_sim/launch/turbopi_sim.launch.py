@@ -29,5 +29,6 @@ def generate_launch_description():
             executable='parameter_bridge',
             arguments=['/model/turbopi/cmd_vel@geometry_msgs/msg/Twist@gz.msgs.Twist'],
             output='screen'
-        ),
+        )
+
     ])
