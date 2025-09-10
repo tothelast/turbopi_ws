@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>turbopi_sim</name>
+  <version>0.0.1</version>
+  <description>TurboPi simulation in Gazebo Harmonic</description>
+  <maintainer email="you@example.com">Garegin</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>ros_gz_sim</exec_depend>
+  <exec_depend>ros_gz_bridge</exec_depend>
+  <exec_depend>python3</exec_depend>
+  <exec_depend>python3-ament-index</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
