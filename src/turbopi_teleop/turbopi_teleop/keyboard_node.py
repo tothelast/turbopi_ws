@@ -19,7 +19,7 @@ Keyboard teleop (hold-to-move, auto-brake on release)
    q   : quit (sends stop burst)
 
  Speed scales:
-   u/m : linear up/down
+   u/m : linear up/downz
    i/, : angular up/down
 """
 
@@ -33,6 +33,10 @@ class KeyboardTeleop(Node):
         self.declare_parameter('ang', 1.00)        # rad/s
         self.declare_parameter('rate_hz', 30.0)    # publish rate
         self.declare_parameter('idle_timeout', 0.20)  # seconds with no key before braking
+        self.declare_parameter('hold_extend', 0.6)   # seconds to sustain motion after a key press
+        self.hold_extend = float(self.get_parameter('hold_extend').value)
+        self.hold_deadline = 0.0
+
 
         self.lin = float(self.get_parameter('lin').value)
         self.ang = float(self.get_parameter('ang').value)
@@ -98,12 +102,11 @@ class KeyboardTeleop(Node):
         elif ch == 'c':
             cmd.angular.z = -self.ang  # rotate right (CW)
         elif ch == 'k':
-            # explicit stop
             self.desired = Twist()
             self.last_input = t
+            self.hold_deadline = t
             return
         elif ch == 'q':
-            # stop burst then exit
             self._stop_burst()
             rclpy.shutdown()
             return
@@ -116,15 +119,15 @@ class KeyboardTeleop(Node):
         self.last_input = t
 
     def _publish_cmd(self):
-        # auto-brake if idle
-        if time.time() - self.last_input > self.idle_timeout:
-            out = Twist()  # zero
+        now = time.time()
+        if now <= self.hold_deadline:
+            out = self.desired
+        elif now - self.last_input > self.idle_timeout:
+            out = Twist()  # auto-brake
         else:
             out = self.desired
-        try:
-            self.pub.publish(out)
-        except Exception:
-            pass
+        self.pub.publish(out)
+
 
     def _stop_burst(self, repeats: int = 10, rate_hz: float = 30.0):
         msg = Twist()
