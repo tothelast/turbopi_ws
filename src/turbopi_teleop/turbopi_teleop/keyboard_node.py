@@ -2,7 +2,6 @@
 import sys
 import termios
 import select
-import signal
 import time
 
 import rclpy
@@ -10,16 +9,18 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist
 
 HELP = """
-Keyboard teleop, hold a key to move.
- w/s: forward/back
- a/d: rotate left/right
- j/l: strafe left/right
- k  : stop
- q  : quit
+Keyboard teleop (hold-to-move, auto-brake on release)
 
-Speed scales:
- u: linear up    m: linear down
- i: angular up   ,: angular down
+ Movement:
+   w/s : forward/back
+   a/d : strafe left/right
+   z/c : rotate left/right
+   k   : stop (zero twist)
+   q   : quit (sends stop burst)
+
+ Speed scales:
+   u/m : linear up/down
+   i/, : angular up/down
 """
 
 class KeyboardTeleop(Node):
@@ -27,108 +28,122 @@ class KeyboardTeleop(Node):
         super().__init__('turbopi_keyboard_teleop')
         self.pub = self.create_publisher(Twist, 'cmd_vel', 10)
 
-        self.declare_parameter('lin', 0.20)   # m/s
-        self.declare_parameter('ang', 1.00)   # rad/s
+        # parameters
+        self.declare_parameter('lin', 0.20)        # m/s
+        self.declare_parameter('ang', 1.00)        # rad/s
+        self.declare_parameter('rate_hz', 30.0)    # publish rate
+        self.declare_parameter('idle_timeout', 0.20)  # seconds with no key before braking
+
         self.lin = float(self.get_parameter('lin').value)
         self.ang = float(self.get_parameter('ang').value)
+        self.rate_hz = float(self.get_parameter('rate_hz').value)
+        self.idle_timeout = float(self.get_parameter('idle_timeout').value)
 
-        # terminal state
+        # current desired command and last input time
+        self.desired = Twist()
+        self.last_input = time.time()
+
+        # configure terminal to non-canonical, signals enabled
         self.fd = sys.stdin.fileno()
         self._saved = termios.tcgetattr(self.fd)
+        new = termios.tcgetattr(self.fd)
+        new[3] = (new[3] & ~(termios.ICANON | termios.ECHO)) | termios.ISIG
+        termios.tcsetattr(self.fd, termios.TCSADRAIN, new)
 
-        # SIGINT handling: do NOT let rclpy auto-shutdown before we can send stop
-        self._sigint = False
-        signal.signal(signal.SIGINT, self._on_sigint)
+        # timers: keyboard poll and periodic publisher
+        self.poll_timer = self.create_timer(0.01, self._poll_keyboard)  # 100 Hz poll
+        self.pub_timer = self.create_timer(1.0 / self.rate_hz, self._publish_cmd)  # periodic publish
 
         self.get_logger().info(HELP.strip())
         self.get_logger().info(f"lin={self.lin:.2f} m/s, ang={self.ang:.2f} rad/s")
-        self.get_logger().info("Press q or Ctrl-C to quit.")
 
-    def _on_sigint(self, signum, frame):
-        # mark for clean exit; we will publish stop from the main loop
-        self._sigint = True
-
-    def _kbmode(self, enable: bool):
-        if enable:
-            new = termios.tcgetattr(self.fd)
-            # disable canonical + echo; KEEP ISIG so signals are delivered
-            new[3] = (new[3] & ~(termios.ICANON | termios.ECHO)) | termios.ISIG
-            termios.tcsetattr(self.fd, termios.TCSADRAIN, new)
-        else:
+    def destroy_node(self):
+        # restore terminal
+        try:
             termios.tcsetattr(self.fd, termios.TCSADRAIN, self._saved)
+        except Exception:
+            pass
+        super().destroy_node()
 
-    def publish_stop(self, repeats: int = 10, rate_hz: float = 30.0):
+    def _poll_keyboard(self):
+        rlist, _, _ = select.select([sys.stdin], [], [], 0.0)
+        if not rlist:
+            return
+        ch = sys.stdin.read(1)
+        t = time.time()
+
+        # speed scaling
+        if ch == 'u':
+            self.lin *= 1.1; return
+        if ch == 'm':
+            self.lin *= 0.9; return
+        if ch == 'i':
+            self.ang *= 1.1; return
+        if ch == ',':
+            self.ang *= 0.9; return
+
+        cmd = Twist()
+
+        # movement mapping, ROS REP 103: +x forward, +y left, +z up
+        if ch == 'w':
+            cmd.linear.x = self.lin
+        elif ch == 's':
+            cmd.linear.x = -self.lin
+        elif ch == 'a':
+            cmd.linear.y = +self.lin   # left strafe
+        elif ch == 'd':
+            cmd.linear.y = -self.lin   # right strafe
+        elif ch == 'z':
+            cmd.angular.z = +self.ang  # rotate left (CCW)
+        elif ch == 'c':
+            cmd.angular.z = -self.ang  # rotate right (CW)
+        elif ch == 'k':
+            # explicit stop
+            self.desired = Twist()
+            self.last_input = t
+            return
+        elif ch == 'q':
+            # stop burst then exit
+            self._stop_burst()
+            rclpy.shutdown()
+            return
+        else:
+            # ignore unknown keys
+            return
+
+        # accept this new command and mark input time
+        self.desired = cmd
+        self.last_input = t
+
+    def _publish_cmd(self):
+        # auto-brake if idle
+        if time.time() - self.last_input > self.idle_timeout:
+            out = Twist()  # zero
+        else:
+            out = self.desired
+        try:
+            self.pub.publish(out)
+        except Exception:
+            pass
+
+    def _stop_burst(self, repeats: int = 10, rate_hz: float = 30.0):
         msg = Twist()
-        period = 1.0 / rate_hz
+        dt = 1.0 / rate_hz
         for _ in range(repeats):
             try:
                 self.pub.publish(msg)
-                # give ROS a tick to flush
-                rclpy.spin_once(self, timeout_sec=0.0)
             except Exception:
-                # if context is already going down, just stop attempting
                 break
-            time.sleep(period)
-
-    def loop(self):
-        self._kbmode(True)
-        try:
-            while rclpy.ok():
-                # if Ctrl-C pressed, exit cleanly
-                if self._sigint:
-                    self.publish_stop()
-                    return
-
-                # poll keyboard without blocking
-                rlist, _, _ = select.select([sys.stdin], [], [], 0.05)
-                if not rlist:
-                    continue
-                ch = sys.stdin.read(1)
-
-                if ch == 'q':
-                    self.publish_stop()
-                    return
-
-                # speed scaling
-                if ch == 'u':
-                    self.lin *= 1.1; continue
-                if ch == 'm':
-                    self.lin *= 0.9; continue
-                if ch == 'i':
-                    self.ang *= 1.1; continue
-                if ch == ',':
-                    self.ang *= 0.9; continue
-
-                msg = Twist()
-                # motions
-                if ch == 'w':
-                    msg.linear.x = self.lin
-                elif ch == 's':
-                    msg.linear.x = -self.lin
-                elif ch == 'j':
-                    msg.linear.y = self.lin
-                elif ch == 'l':
-                    msg.linear.y = -self.lin
-                elif ch == 'a':
-                    msg.angular.z = +self.ang
-                elif ch == 'd':
-                    msg.angular.z = -self.ang
-                elif ch == 'k':
-                    pass  # zero twist stop
-                else:
-                    continue
-
-                self.pub.publish(msg)
-        finally:
-            self._kbmode(False)
+            time.sleep(dt)
 
 def main():
     rclpy.init()
     node = KeyboardTeleop()
     try:
-        node.loop()
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        node._stop_burst()
     finally:
-        # only shut down if still running
         if rclpy.ok():
             rclpy.shutdown()
         node.destroy_node()
