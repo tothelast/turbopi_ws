@@ -7,6 +7,7 @@ import time
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
+from std_msgs.msg import Float64
 
 HELP = """
 Keyboard teleop (hold-to-move, auto-brake on release)
@@ -18,8 +19,13 @@ Keyboard teleop (hold-to-move, auto-brake on release)
    k   : stop (zero twist)
    q   : quit (sends stop burst)
 
+ Camera Control:
+   j/l : pan left/right
+   o/p : tilt up/down
+   h   : center camera
+
  Speed scales:
-   u/m : linear up/downz
+   u/m : linear up/down
    i/, : angular up/down
 """
 
@@ -27,6 +33,10 @@ class KeyboardTeleop(Node):
     def __init__(self):
         super().__init__('turbopi_keyboard_teleop')
         self.pub = self.create_publisher(Twist, 'cmd_vel', 10)
+
+        # Camera servo publishers
+        self.pan_pub = self.create_publisher(Float64, 'camera_pan', 10)
+        self.tilt_pub = self.create_publisher(Float64, 'camera_tilt', 10)
 
         # parameters
         self.declare_parameter('lin', 0.20)        # m/s
@@ -46,6 +56,12 @@ class KeyboardTeleop(Node):
         # current desired command and last input time
         self.desired = Twist()
         self.last_input = time.time()
+
+        # Camera servo positions (in degrees, roughly)
+        self.pan_angle = 0.0    # -90 to +90
+        self.tilt_angle = 0.0   # -45 to +45
+        self.pan_step = 10.0    # degrees per keypress
+        self.tilt_step = 10.0   # degrees per keypress
 
         # configure terminal to non-canonical, signals enabled
         self.fd = sys.stdin.fileno()
@@ -110,6 +126,29 @@ class KeyboardTeleop(Node):
             self._stop_burst()
             rclpy.shutdown()
             return
+
+        # Camera control
+        elif ch == 'j':  # pan left
+            self.pan_angle = max(-90.0, self.pan_angle - self.pan_step)
+            self._publish_camera()
+            return
+        elif ch == 'l':  # pan right
+            self.pan_angle = min(90.0, self.pan_angle + self.pan_step)
+            self._publish_camera()
+            return
+        elif ch == 'o':  # tilt up
+            self.tilt_angle = min(45.0, self.tilt_angle + self.tilt_step)
+            self._publish_camera()
+            return
+        elif ch == 'p':  # tilt down
+            self.tilt_angle = max(-45.0, self.tilt_angle - self.tilt_step)
+            self._publish_camera()
+            return
+        elif ch == 'h':  # center camera
+            self.pan_angle = 0.0
+            self.tilt_angle = 0.0
+            self._publish_camera()
+            return
         else:
             # ignore unknown keys
             return
@@ -130,6 +169,17 @@ class KeyboardTeleop(Node):
             out = self.desired
         self.pub.publish(out)
 
+    def _publish_camera(self):
+        """Publish current camera servo positions"""
+        pan_msg = Float64()
+        pan_msg.data = self.pan_angle
+        self.pan_pub.publish(pan_msg)
+
+        tilt_msg = Float64()
+        tilt_msg.data = self.tilt_angle
+        self.tilt_pub.publish(tilt_msg)
+
+        self.get_logger().info(f"Camera: pan={self.pan_angle:.1f}°, tilt={self.tilt_angle:.1f}°")
 
     def _stop_burst(self, repeats: int = 10, rate_hz: float = 30.0):
         msg = Twist()
