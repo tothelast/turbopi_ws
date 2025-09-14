@@ -1,7 +1,9 @@
 #!/usr/bin/python3
 # coding=utf8
 import sys
-sys.path.append('/home/pi/TurboPi/')
+import os
+# Add the parent directory to the path so we can import modules
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import cv2
 import time
 import math
@@ -15,6 +17,7 @@ import HiwonderSDK.PID as PID
 import HiwonderSDK.Misc as Misc
 import HiwonderSDK.Board as Board
 import HiwonderSDK.mecanum as mecanum
+
 
 # Color tracking
 
@@ -327,7 +330,7 @@ if __name__ == '__main__':
     init()
     start()
     target_color = ('red',)
-	whell_en = True
+    wheel_en = True
     camera = Camera.Camera()
     camera.camera_open(correction=True) # Enable distortion correction which is not enabled by default
     signal.signal(signal.SIGINT, manual_stop)

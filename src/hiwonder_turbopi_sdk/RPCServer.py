@@ -2,7 +2,6 @@
 # coding=utf8
 import os
 import sys
-sys.path.append('/home/pi/TurboPi/')
 import time
 import logging
 import threading
